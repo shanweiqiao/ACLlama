@@ -15,10 +15,22 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # output_tag="../ACLlama_output/ACLlama_lora_finetune"
 # output_tag="../ACLlama_output/ACLlama_lora_finetune_add_contrastive_loss"
+# output_tag="../ACLlama_output/ACLlama_lora_finetune_add_contrastive_loss_v1"
 # output_tag="../ACLlama_output/ACLlama_lora_finetune_add_clip_contrastive_loss"
-# output_tag="../ACLlama_output/whisper-large-v3-and-Llama-3.2-3B-align"
-output_tag="../ACLlama_output/ACLlama_load_pretrained_encoder_only_adapter-align"
-output_tag="../ACLlama_output/ACLlama_load_pretrained_encoder_encoder-align-v1"
+# output_tag="../ACLlama_output/ACLlama_lora_finetune_add_clip_contrastive_loss_audio_caption_300epoch"
+# output_tag="../ACLlama_output/ACLlama_lora_finetune_add_clip_contrastive_loss_audio_caption_300epoch_large_batch"
+# output_tag="../ACLlama_output/ACLlama_encoder_stage1"
+# output_tag="../ACLlama_output/ACLlama_encoder_stage2_from_contrastive_asr_loss_base_stage1"
+# output_tag="../ACLlama_output/ACLlama_cross_attn_model_only_adapter"
+output_tag="../ACLlama_output/ACLlama_cross_attn_model_only_adapter_decoderfix"
+
+if [[ ! -e ${output_tag} ]]; then
+    mkdir -p ${output_tag}
+fi
+code_save_path=$output_tag"/code_save"
+if [[ ! -e ${code_save_path} ]]; then
+    mkdir -p ${save_dir}
+fi
 
 export CUDA_VISIBLE_DEVICES=${device[@]}
 cmd="torchrun
@@ -26,20 +38,20 @@ cmd="torchrun
     --nnodes 1
     --node_rank 0
     --master_addr localhost
-    --master_port 6601
+    --master_port 6881
     finetune_acllama.py
     --audio_model_name_or_path "/data/s50042884/huggingface_model/whisper-large-v3"
-    --text_model_name_or_path "../ACLlama_output/ACLlama_load_pretrained_encoder"
+    --text_model_name_or_path "../ACLlama_output/ACLlama_cross_attn_model"
     --data_path "/data/s50042884/huggingface_model/libri_train_update.json"
     --output_dir ${output_tag}
-    --num_train_epochs 40
+    --num_train_epochs 30
     --fp16 True
-    --per_device_train_batch_size 4
+    --per_device_train_batch_size 16
     --per_device_eval_batch_size 1
-    --gradient_accumulation_steps 64
+    --gradient_accumulation_steps 16
     --evaluation_strategy "no"
     --save_strategy "steps"
-    --save_steps 300
+    --save_steps 10
     --save_total_limit 100
     --learning_rate 1e-4
     --weight_decay 0.1
@@ -56,45 +68,24 @@ cmd="torchrun
     # --per_device_train_batch_size 32 \
     # --per_device_eval_batch_size 1 \
     # --gradient_accumulation_steps 8 \
+    # --data_path "/data/s50042884/my_code/data/audio_caps_formatted.json"
     # --deepspeed "./config/ds_config_zero2.json" \
     # --fp16 True \
     # --bf16 True \
+    # --num_train_epochs 40 \
+        # --use_lora
+
+script_path=$(realpath "$0")
+script_dir=$(dirname "$(realpath "$0")")
+cp ${script_path} ${save_dir}/
+cp ./finetune_acllama.py ${code_save_path}
+cp ./ACLlama_el.py ${code_save_path}
+cp ./dump_model.py ${code_save_path}
+cp ./my_dump_model.sh ${code_save_path}
 
 save_cmd="${output_tag}/train.log"
 echo $cmd
 eval $cmd 2>&1 | tee $save_cmd
-
-# torchrun \
-#     --nproc_per_node 8 \
-#     --nnodes 1 \
-#     --node_rank 0 \
-#     --master_addr localhost \
-#     --master_port 6601 \
-#     finetune_acllama.py \
-#     --audio_model_name_or_path "/data/s50042884/huggingface_model/whisper-large-v3" \
-#     --text_model_name_or_path "../ACLlama_output/ACLlama_lora" \
-#     --data_path "/data/s50042884/my_code/audio_pretrain/data/audio_caps_formatted.json" \
-#     --output_dir ${output_tag} \
-#     --num_train_epochs 40 \
-#     --fp16 True \
-#     --per_device_train_batch_size 16 \
-#     --per_device_eval_batch_size 1 \
-#     --gradient_accumulation_steps 16 \
-#     --evaluation_strategy "no" \
-#     --save_strategy "steps" \
-#     --save_steps 100 \
-#     --save_total_limit 1 \
-#     --learning_rate 1e-4 \
-#     --weight_decay 0.1 \
-#     --adam_beta2 0.95 \
-#     --warmup_ratio 0.01 \
-#     --lr_scheduler_type "cosine" \
-#     --logging_steps 1 \
-#     --report_to "none" \
-#     --model_max_length 512 \
-#     --gradient_checkpointing True \
-#     --deepspeed "./config/ds_config_zero2.json" \
-#     --use_lora
 
 # python3 finetune_acllama.py \
 #     --audio_model_name_or_path "/data/s50042884/huggingface_model/whisper-large-v3" \
