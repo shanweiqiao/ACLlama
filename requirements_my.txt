@@ -33,10 +33,12 @@ evaluate==0.4.3
 everett==3.1.0
 exceptiongroup==1.2.2
 filelock==3.17.0
+flash-attn @ file:///data/s50042884/tools/flash_attn-2.6.3%2Bcu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl#sha256=ee0742a372f79f413905a2385b1473867fdcf48bbe6ed504e371cf1699154e3b
 fonttools==4.56.0
 frozenlist==1.5.0
 fsspec==2024.2.0
 grpcio==1.71.0
+hf_transfer==0.1.9
 hjson==3.1.0
 huggingface-hub==0.29.1
 hypothesis==6.131.13
@@ -54,11 +56,14 @@ jsonargparse==3.13.1
 jsonlines==4.0.0
 jsonschema==4.23.0
 jsonschema-specifications==2024.10.1
+kenlm @ https://github.com/kpu/kenlm/archive/master.zip#sha256=f935c2ac0be6dd1bf96a5852973dad6103c48e866cf33532459fb1336bea4bfe
 kiwisolver==1.4.8
 lazy_loader==0.4
 librosa==0.11.0
 lightning-utilities==0.14.2
 llvmlite==0.44.0
+# Editable install with no version control (lm_eval==0.4.7)
+-e /data/s50042884/my_code/deepseek_distillation/lm-evaluation-harness
 lxml==5.3.1
 Markdown==3.7
 markdown-it-py==3.0.0
@@ -67,7 +72,7 @@ matplotlib==3.10.1
 mbstrdecoder==1.1.4
 mdurl==0.1.2
 more-itertools==10.3.0
-mpi4py
+mpi4py @ file:///croot/mpi4py_1671223370575/work
 mpmath==1.3.0
 msgpack==1.1.0
 multidict==6.1.0
