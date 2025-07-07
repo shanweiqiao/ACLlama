@@ -21,14 +21,14 @@ python llama3.1_peft_lora_predict.py \
     --audio_tower "/data/s50042884/huggingface_model/whisper-large-v3" \
     --base_model_path ${model_path}"checkpoint-6000" \
     --peft_model_id ${model_path}"checkpoint-6000" \
-    --clean_out_path ${model_path}"Speaker_Gender_Recognition.txt" \
-    --other_out_path ${model_path}"test_temp.txt" \
+    --clean_out_path ${model_path}"test_clean.txt" \
+    --other_out_path ${model_path}"test_other.txt" \
     --num_threads ${gpu_num}
 
     # --clean_out_path "/data/s50042884/my_code/audio_pretrain/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_from_contrastive_asr_loss_base_stage1/test_clean.txt" \
     # --other_out_path "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_from_contrastive_asr_loss_base_stage2/test_other.txt" \
     # --eval_data "/data/s50042884/huggingface_model/libri_test_clean.json" \
     # --eval_data "/data/s50042884/huggingface_model/libri_test_other.json" \
-    # --clean_out_path "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_from_contrastive_asr_loss_base_stage2/Speaker_Gender_Recognition.txt" \
+    # --clean_out_path "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_from_contrastive_asr_loss_base_stage2/test_Spoken_Language_Identification.txt" \
     # --other_out_path "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_from_contrastive_asr_loss_base_stage2/test_temp.txt" \
 
