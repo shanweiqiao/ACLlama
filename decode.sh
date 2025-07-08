@@ -13,8 +13,8 @@ export DISABLE_TORCH_COMPILE=1
 export NCCL_DEBUG=INFO
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-# model_path="/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_chatllm_stage1/"
 model_path="/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_chatllm_stage1/"
+# model_path="/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_contrastive_asr_loss_from_stage1_chatllm/"
 export CUDA_VISIBLE_DEVICES=${device[@]}
 python llama3.1_peft_lora_predict.py \
     --eval_data "/data/s50042884/huggingface_model/libri_test.json" \

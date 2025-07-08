@@ -276,11 +276,12 @@ def main(args):
 
     ########
     # inference_dataset = "librispeech"
-    inference_dataset = "AirBench-Speaker_Gender_Recognition"
+    inference_dataset = "AirBench-Music_Midi_Pitch_Analysis"
     air_bench_task_name = inference_dataset.split("-")[-1]
     
     data_path_root = '/data/s50042884/huggingface_model/AIR-Bench-Dataset/Foundation'  #Foundation dataset Path
     pretrained_model_path = "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_chatllm_stage1/checkpoint-6000"
+    # pretrained_model_path = "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_contrastive_asr_loss_from_stage1_chatllm/checkpoint-2000"
 
     my_decode_args = {"pretrained_model_path": pretrained_model_path, "inference_dataset": inference_dataset, "data_path_root": data_path_root}
     
@@ -371,7 +372,7 @@ def main(args):
                         other_out.write(line + "\n")
                         
     elif "AirBench" in inference_dataset:
-        with open(args.clean_out_path, "a") as clean_out:
+        with open(clean_out_file_name, "a") as clean_out:
             for thread_id in range(args.num_threads):
                 thread_results = return_dict[thread_id]
 
