@@ -11,17 +11,12 @@ import random
 from tqdm import tqdm
 import torch.multiprocessing as mp
 
-########
-import torch_npu
-from torch_npu.contrib import transfer_to_npu
-########
-
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 
 class BasicSetting:
     def __init__(self):
-        # self.devices = ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
+        # self.devices = ["npu:0", "npu:1", "npu:2", "npu:3"]
         self.devices = ["npu:0", "npu:1", "npu:2", "npu:3", "npu:4", "npu:5", "npu:6",  "npu:7"]
         self.sampling_rate = 16000
         self.audio_token_len = 1  # 1500 = 300 token x 5 compress
@@ -40,8 +35,6 @@ def get_result(model_inputs, model, tokenizer, audio_feat):
         eos_token_id=tokenizer.eos_token_id,
         # do_sample=False,
     )
-    # print(f"output_ids is : {output_ids}")
-    # exit(0)
     # print(tokenizer.batch_decode(output_ids))
     input_ids = model_inputs["input_ids"]
     input_token_len = input_ids.shape[1]
@@ -79,7 +72,7 @@ def gen_model_inputs(tokenizer, system, prompt, device, audio_placeholder_ids, b
     return dict(input_ids=input_ids, attention_mask=attention_mask)
 
 
-def process_items(thread_id, subset, args, CONFIG, return_dict):
+def process_items(thread_id, subset, args, CONFIG, return_dict, my_decode_args):
     device = CONFIG.devices[thread_id % len(CONFIG.devices)]  # 根据线程ID选择设备
     print(f"Thread-{thread_id} running on {device}")
 
@@ -90,30 +83,9 @@ def process_items(thread_id, subset, args, CONFIG, return_dict):
         torch_dtype=torch.float16,
         quantization_config=quantization_config,
     )
-    
-    # import glob
-    # from safetensors.torch import load_file
-    # shard_files = sorted(glob.glob(os.path.join(args.peft_model_id, "adapter_model-*.safetensors")))
-    # if not shard_files:
-    #     shard_files = sorted(glob.glob(os.path.join(args.peft_model_id, "adapter_model.safetensors")))
-    # need_combined_weights = {}
-    # for shard in shard_files:
-    #     shard_state = load_file(shard)
-    #     need_combined_weights.update(shard_state)
-    # print(f"need_combined_weights is : {need_combined_weights.keys()}")
-    
-    # # new_sd = {}
-    # # for k, v in need_combined_weights.items():
-    # #     if ".lora_A.weight" in k and ".default" not in k:
-    # #         k = k.replace(".lora_A.weight", ".lora_A.default.weight")
-    # #     if ".lora_B.weight" in k and ".default" not in k:
-    # #         k = k.replace(".lora_B.weight", ".lora_B.default.weight")
-    # #     new_sd[k] = v
-    # # torch.save(new_sd, os.path.join(args.peft_model_id, "adapter_model/patched.bin"))
-    
     for module in model.model.audio_tower:
         module.to(device)
-    torch_npu.npu.empty_cache()
+    torch.cuda.empty_cache()
     # model.model.mask_tensor = model.model.mask_tensor.to(device)
     tokenizer = AutoTokenizer.from_pretrained(args.peft_model_id)
 
@@ -124,17 +96,60 @@ def process_items(thread_id, subset, args, CONFIG, return_dict):
 
     # LoRA
     lora_config = PeftConfig.from_pretrained(args.peft_model_id)
-    # model = PeftModel.from_pretrained(model, os.path.join(args.peft_model_id, "adapter_model/patched.bin"), config=lora_config, adapter_name="default").to(
     model = PeftModel.from_pretrained(model, args.peft_model_id, config=lora_config).to(
         dtype=torch.float16, device=device
     )
-    torch_npu.npu.empty_cache()
+    torch.cuda.empty_cache()
     model.eval()
 
     #######
-    pretrained_model_path = "/data/s50042884/my_code/ACLlama_output/whisper-large-v3-and-Llama-3.2-3B-cross-attn-align/checkpoint-5480"
+    pretrained_model_path = my_decode_args["pretrained_model_path"]
+    inference_dataset = my_decode_args["inference_dataset"]
+    if "AirBench" in inference_dataset:
+        air_bench_task_name = inference_dataset.split("-")[-1]
+        data_path_root = my_decode_args["data_path_root"]
+        
     shard_state = torch.load(pretrained_model_path + "/base_model.bin", map_location=f"{device}")
     model.load_state_dict(shard_state, strict=True)
+    
+    # need_combined_weights = {}
+    # for item in shard_state.keys():
+    #     if "base_model.model.model.layers." in item:
+    #         continue
+        
+    #     def replace_ckpt_key_name(need_combined_weights, key_item, replaced_item, ckpt_name, ori_replaced_name, save_replaced_name):
+    #         replaced_item_temp = replaced_item.replace(ckpt_name, ori_replaced_name)
+    #         need_combined_weights[replaced_item_temp] = shard_state[key_item]
+    #         replaced_item_temp = replaced_item.replace(ckpt_name, save_replaced_name)
+    #         need_combined_weights[replaced_item_temp] = shard_state[key_item]
+    #         return need_combined_weights
+        
+    #     fix_item = item
+    #     if "model." in fix_item:
+    #         fix_item = fix_item.replace("model.", "base_model.model.model.")
+            
+    #     if "mm_projector1.bias" in item:
+    #         need_combined_weights = replace_ckpt_key_name(need_combined_weights, item, fix_item, "mm_projector1.bias", "mm_projector1.original_module.bias", "mm_projector1.modules_to_save.default.bias")
+    #     if "mm_projector1.weight" in fix_item:
+    #         need_combined_weights = replace_ckpt_key_name(need_combined_weights, item, fix_item, "mm_projector1.weight", "mm_projector1.original_module.weight", "mm_projector1.modules_to_save.default.weight")
+    #     if "model.model.lbm" in fix_item:
+    #         need_combined_weights = replace_ckpt_key_name(need_combined_weights, item, fix_item, "model.model.lbm", "model.model.lbm.original_module", "model.model.lbm.modules_to_save.default")
+    #     if "out_norm" in fix_item:
+    #         need_combined_weights = replace_ckpt_key_name(need_combined_weights, item, fix_item, "out_norm", "out_norm.original_module", "out_norm.modules_to_save.default")
+    #     if "asr_transformer_encoder" in fix_item:
+    #         need_combined_weights = replace_ckpt_key_name(need_combined_weights, item, fix_item, "asr_transformer_encoder", "asr_transformer_encoder.original_module", "asr_transformer_encoder.modules_to_save.default")
+            
+    #     if "model.audio_feature_head.weight" == item:
+    #         fix_item = "base_model.model.model.audio_feature_head.weight"
+    #         need_combined_weights[fix_item] = shard_state[item]
+    #     if "lm_head.weight" == item:
+    #         fix_item = "base_model.model.lm_head.weight"
+    #         need_combined_weights[fix_item] = shard_state[item]
+    #     if "model.norm.weight" == item:
+    #         fix_item = "base_model.model.model.norm.weight"
+    #         need_combined_weights[fix_item] = shard_state[item]
+
+    # model.load_state_dict(need_combined_weights, strict=False)
     #######
 
     DEFAULT_AUDIO_PATCH_TOKEN = "<audio_patch>"
@@ -162,46 +177,191 @@ def process_items(thread_id, subset, args, CONFIG, return_dict):
     model_inputs = gen_model_inputs(tokenizer, system, prompt, device, audio_placeholder_ids, begin_of_text_id,
                                     start_header_id, end_header_id, eot_id, nl_tokens, _system, _user, _assistant)
 
-    thread_results = {"clean": [], "other": [], "train": []}
 
-    for idx, i in tqdm(subset, desc=f"Thread-{thread_id} processing"):
-        cur_input_audio_file = i["conversations"][0]["audio"]
+    # thread_results = {"clean": [], "other": []}
 
-        if "test-other" in cur_input_audio_file:
-            category = "other"
-        elif "test-clean" in cur_input_audio_file:
-            category = "clean"
-        elif "train" in cur_input_audio_file:
-            category = "train"
-        else:
-            print(f"Unrecognized audio file: {cur_input_audio_file}")
-            raise ValueError("Unrecognized audio file category")
+    # for idx, i in tqdm(subset, desc=f"Thread-{thread_id} processing"):
+    #     cur_input_audio_file = i["conversations"][0]["audio"]
 
-        audio, _ = librosa.load(cur_input_audio_file, sr=CONFIG.sampling_rate)
-        audio_feat = audio_processor(
-            audio, sampling_rate=CONFIG.sampling_rate, return_tensors="pt"
-        ).input_features
-        audio_feat = audio_feat.to(device, dtype=torch.float16)
+    #     if "test-other" in cur_input_audio_file:
+    #         category = "other"
+    #     elif "test-clean" in cur_input_audio_file:
+    #         category = "clean"
+    #     else:
+    #         print(f"Unrecognized audio file: {cur_input_audio_file}")
+    #         raise ValueError("Unrecognized audio file category")
 
-        base_model_response = get_result(model_inputs, model, tokenizer, audio_feat)
+    #     audio, _ = librosa.load(cur_input_audio_file, sr=CONFIG.sampling_rate)
+    #     audio_feat = audio_processor(
+    #         audio, sampling_rate=CONFIG.sampling_rate, return_tensors="pt"
+    #     ).input_features
+    #     audio_feat = audio_feat.to(device, dtype=torch.float16)
 
-        result_ = (
-                base_model_response.replace("The person says: ", "").strip()
-                + " ||| "
-                + i["conversations"][1]["value"].replace("The person says: ", "").strip()
-        )
+    #     base_model_response = get_result(model_inputs, model, tokenizer, audio_feat)
+    #     result_ = (
+    #             base_model_response.replace("The person says: ", "").strip()
+    #             + " ||| "
+    #             + i["conversations"][1]["value"].replace("The person says: ", "").strip()
+    #     )
         
-        thread_results[category].append(result_)
+    #     print(f"result_ is : {result_}")
+        
+    #     thread_results[category].append(result_)
 
+    ########
+    if inference_dataset == "librispeech":
+        """
+        ori librispeech clean and other inference
+        """
+        thread_results = {"clean": [], "other": []}
+
+        for idx, i in tqdm(subset, desc=f"Thread-{thread_id} processing"):
+            cur_input_audio_file = i["conversations"][0]["audio"]
+
+            if "test-other" in cur_input_audio_file:
+                category = "other"
+            elif "test-clean" in cur_input_audio_file:
+                category = "clean"
+            else:
+                print(f"Unrecognized audio file: {cur_input_audio_file}")
+                raise ValueError("Unrecognized audio file category")
+
+            audio, _ = librosa.load(cur_input_audio_file, sr=CONFIG.sampling_rate)
+            audio_feat = audio_processor(
+                audio, sampling_rate=CONFIG.sampling_rate, return_tensors="pt"
+            ).input_features
+            audio_feat = audio_feat.to(device, dtype=torch.float16)
+
+            base_model_response = get_result(model_inputs, model, tokenizer, audio_feat)
+            result_ = (
+                    base_model_response.replace("The person says: ", "").strip()
+                    + " ||| "
+                    + i["conversations"][1]["value"].replace("The person says: ", "").strip()
+            )
+            
+            print(f"result_ is : {result_}")
+            
+            thread_results[category].append(result_)
+    
+    elif "AirBench" in inference_dataset:
+        """
+        air-bench test
+        """
+        thread_results = {air_bench_task_name: []}
+        print(f"thread_results is : {thread_results}")
+
+        for i, item in tqdm(subset, desc=f"Thread-{thread_id} processing"):
+            
+            wav = item['path']
+            task_name = item['task_name']
+            dataset_name = item['dataset_name']
+            if task_name =='Audio_Grounding':
+                wav = item['path']
+                data_path = wav_fn = f'{data_path_root}/{task_name}_{dataset_name}/{wav}'[:-3] + 'flac'
+            else:
+                wav = item['path']
+                data_path = wav_fn = f'{data_path_root}/{task_name}_{dataset_name}/{wav}'
+            
+            #Construct prompt
+            question = item['question']
+            question_prompts = 'Choose the most suitable answer from options A, B, C, and D to respond the question in next line, you may only choose A or B or C or D.'
+            choice_a = item['choice_a']
+            choice_b = item['choice_b']
+            choice_c = item.get('choice_c', None)
+            choice_d = item.get('choice_d', None)
+            choices = f'A. {choice_a}\nB. {choice_b}\nC. {choice_c}\nD. {choice_d}'
+            instruction = question_prompts + '\n' + question + '\n' + choices
+            
+            model_inputs = gen_model_inputs(tokenizer, system, instruction, device, audio_placeholder_ids, begin_of_text_id,
+                                            start_header_id, end_header_id, eot_id, nl_tokens, _system, _user, _assistant)
+
+            audio, _ = librosa.load(data_path, sr=CONFIG.sampling_rate)
+            audio_feat = audio_processor(
+                audio, sampling_rate=CONFIG.sampling_rate, return_tensors="pt"
+            ).input_features
+            audio_feat = audio_feat.to(device, dtype=torch.float16)
+
+            base_model_response = get_result(model_inputs, model, tokenizer, audio_feat)
+
+            #Step 4: save result
+            result_ = json.dumps(
+                {
+                    "path": item["path"],
+                    "question": question,
+                    "choice_a": choice_a,
+                    "choice_b": choice_b,
+                    "choice_c": choice_c,
+                    "choice_d": choice_d,
+                    "answer_gt": item["answer_gt"],
+                    "task_name": task_name,
+                    "dataset_name": dataset_name,
+                    "response": base_model_response.replace("The person says: ", "").strip(),
+                    "uniq_id": item["uniq_id"],
+                },
+                #indent=4, 
+                ensure_ascii=False
+            )
+            thread_results[air_bench_task_name].append(result_)
+    ########
+    
     return_dict[thread_id] = thread_results
 
 
 def main(args):
-    open(args.clean_out_path, "w").close()
-    open(args.other_out_path, "w").close()
+    # open(args.clean_out_path, "w").close()
+    # open(args.other_out_path, "w").close()
 
-    with open(args.eval_data, "r") as fo:
-        items = json.load(fo)
+    # with open(args.eval_data, "r") as fo:
+    #     items = json.load(fo)
+
+    ########
+    inference_dataset = "librispeech"
+    # inference_dataset = "AirBench-Music_Instruments_Classfication"
+    air_bench_task_name = inference_dataset.split("-")[-1]
+    
+    data_path_root = '/data/s50042884/huggingface_model/AIR-Bench-Dataset/Foundation'  #Foundation dataset Path
+    pretrained_model_path = "/data/s50042884/my_code/ACLlama_A100_right/ACLlama_output/ACLlama_encoder_contrastive_base_stage1_chatllm_npu/checkpoint-1100"
+    # pretrained_model_path = "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_contrastive_asr_loss_from_stage1_chatllm/checkpoint-2000"
+
+    my_decode_args = {"pretrained_model_path": pretrained_model_path, "inference_dataset": inference_dataset, "data_path_root": data_path_root}
+    
+    clean_out_file_name = args.clean_out_path
+    other_out_file_name = args.other_out_path
+    if inference_dataset == "librispeech":
+        with open(args.eval_data, "r") as fo:
+            items = json.load(fo)
+        open(other_out_file_name, "w").close()
+    elif "AirBench" in inference_dataset:
+        
+        
+        input_file = f'{data_path_root}/Foundation_meta.json'
+        with open(input_file, "r") as fin:
+            items = json.load(fin)
+            
+        filter_item = []
+        for item in items:
+            task_name = item['task_name']
+            if task_name != air_bench_task_name:
+                continue
+            dataset_name = item['dataset_name']
+            if task_name =='Audio_Grounding':
+                wav = item['path']
+                data_path = wav_fn = f'{data_path_root}/{task_name}_{dataset_name}/{wav}'[:-3] + 'flac'
+            else:
+                wav = item['path']
+                data_path = wav_fn = f'{data_path_root}/{task_name}_{dataset_name}/{wav}'
+                
+            if os.path.exists(wav_fn) == False:
+                print(f"lack wav {wav_fn}")
+                continue
+            
+            filter_item.append(item)
+            
+        items = filter_item
+        clean_out_file_name = clean_out_file_name.strip("clean.txt") + inference_dataset.split("-")[-1] + ".txt"
+
+    open(clean_out_file_name, "w").close()
+    ########
 
     # 数据分块 并附带每条数据原始索引
     if args.num_threads > 0:
@@ -221,7 +381,10 @@ def main(args):
     for thread_id in range(args.num_threads):
         p = mp.Process(
             target=process_items,
-            args=(thread_id, subsets[thread_id], args, CONFIG, return_dict),
+            # args=(thread_id, subsets[thread_id], args, CONFIG, return_dict),
+            #######
+            args=(thread_id, subsets[thread_id], args, CONFIG, return_dict, my_decode_args),
+            #######
         )
         processes.append(p)
         p.start()
@@ -229,15 +392,35 @@ def main(args):
     for p in processes:
         p.join()
 
-    with open(args.clean_out_path, "a") as clean_out, open(args.other_out_path, "a") as other_out:
-        for thread_id in range(args.num_threads):
-            thread_results = return_dict[thread_id]
-            for line in thread_results["clean"]:
-                clean_out.write(line + "\n")
-            for line in thread_results["other"]:
-                other_out.write(line + "\n")
-            for line in thread_results["train"]:
-                other_out.write(line + "\n")
+    # with open(args.clean_out_path, "a") as clean_out, open(args.other_out_path, "a") as other_out:
+    #     for thread_id in range(args.num_threads):
+    #         thread_results = return_dict[thread_id]
+    #         for line in thread_results["clean"]:
+    #             clean_out.write(line + "\n")
+    #         for line in thread_results["other"]:
+    #             other_out.write(line + "\n")
+                
+    ########
+    if inference_dataset == "librispeech":
+        with open(args.clean_out_path, "a") as clean_out, open(args.other_out_path, "a") as other_out:
+            for thread_id in range(args.num_threads):
+                thread_results = return_dict[thread_id]
+                if inference_dataset == "librispeech":
+                    for line in thread_results["clean"]:
+                        clean_out.write(line + "\n")
+                    for line in thread_results["other"]:
+                        other_out.write(line + "\n")
+                        
+    elif "AirBench" in inference_dataset:
+        with open(clean_out_file_name, "a") as clean_out:
+            for thread_id in range(args.num_threads):
+                thread_results = return_dict[thread_id]
+
+                for line in thread_results[inference_dataset.split("-")[-1]]:
+                    clean_out.write(line + "\n")
+        
+    ########
+    
     print("Processing completed!")
 
 

@@ -13,32 +13,16 @@ export DISABLE_TORCH_COMPILE=1
 export NCCL_DEBUG=INFO
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-output_model_root="/data/s50042884/my_code/ACLlama_output/"
-output_model_path=${output_model_root}"whisper-large-v3-and-Llama-3.2-3B-align/"
-
-export ASCEND_VISIBLE_DEVICES=${device[@]}
-export ASCEND_DEVICE_ID=${device[@]}
-cmd="python llama3.1_peft_lora_predict_npu.py
-    --eval_data "/data/s50042884/huggingface_model/libri_train_update.json"
-    --audio_tower "/data/s50042884/huggingface_model/whisper-large-v3"
-    --base_model_path ${output_model_root}"/ACLlama_finetune_whisper/"
-    --peft_model_id ${output_model_path}"/checkpoint-100/"
-    --clean_out_path ${output_model_path}"/test_clean.txt"
-    --other_out_path ${output_model_path}"/test_other.txt"
-    --num_threads ${gpu_num}"
-
-save_cmd="${output_model_path}/inference.log"
-echo $cmd
-eval $cmd 2>&1 | tee $save_cmd
-
-# python llama3.1_peft_lora_predict.py \
-#     --eval_data "/data/s50042884/huggingface_model/libri_test.json" \
-#     --audio_tower "/data/s50042884/huggingface_model/whisper-large-v3" \
-#     --base_model_path ${output_model_root}"/ACLlama_lora/" \
-#     --peft_model_id ${output_model_path}"/checkpoint-30/" \
-#     --clean_out_path ${output_model_path}"/test_clean.txt" \
-#     --other_out_path ${output_model_path}"/test_other.txt" \
-#     --num_threads ${gpu_num}
+model_path="/data/s50042884/my_code/ACLlama_A100_right/ACLlama_output/ACLlama_encoder_contrastive_base_stage1_chatllm_npu/"
+export CUDA_VISIBLE_DEVICES=${device[@]}
+python llama3.1_peft_lora_predict_npu.py \
+    --eval_data "/data/s50042884/huggingface_model/libri_test.json" \
+    --audio_tower "/data/s50042884/huggingface_model/whisper-large-v3" \
+    --base_model_path "/data/s50042884/my_code/ACLlama_A100_right/ACLlama_output/ACLlama_encoder_stage2_base_chatllm_stage1/checkpoint-6000" \
+    --peft_model_id "/data/s50042884/my_code/ACLlama_A100_right/ACLlama_output/ACLlama_encoder_stage2_base_chatllm_stage1/checkpoint-6000" \
+    --clean_out_path ${model_path}"test_clean.txt" \
+    --other_out_path ${model_path}"test_other.txt" \
+    --num_threads ${gpu_num}
 
 
     # --eval_data "/data/s50042884/huggingface_model/libri_test_clean.json" \

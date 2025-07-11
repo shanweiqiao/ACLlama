@@ -9,14 +9,14 @@ anyio==4.4.0
 argon2-cffi==23.1.0
 argon2-cffi-bindings==21.2.0
 arrow==1.3.0
-ascendebug
+ascendebug @ file:///home/ma-user/Ascend/ascend-toolkit/8.0.RC2.alpha003/toolkit/tools/ascendebug-0.1.0-py3-none-any.whl#sha256=49f2e96422ec50a634017aae0227e1744b34105aa88af8119f4d1ccdf3ec50aa
 asttokens==2.4.1
 astunparse==1.6.3
 async-lru==2.0.4
 async-timeout==4.0.3
 attrs==24.2.0
 audioread==3.0.1
-auto-tune
+auto-tune @ file:///home/ma-user/selfgz2401465329/compiler/lib64/auto_tune-0.1.0-py3-none-any.whl#sha256=4352e50395eae6de7f6656108939db60fc695ecb8694b53f15a41b226c212f97
 av==12.3.0
 babel==2.16.0
 beautifulsoup4==4.12.3
@@ -32,11 +32,11 @@ coloredlogs==15.0.1
 comm==0.2.2
 concurrent-log-handler==0.9.25
 ctranslate2==4.4.0
-dataflow
+dataflow @ file:///home/ma-user/selfgz2401465329/compiler/lib64/dataflow-0.0.1-py3-none-any.whl#sha256=348b0477012c8f21c0435683d496738252e7e279017ee38c3a3ea55fe60233bf
 datasets==2.18.0
 debugpy==1.8.5
 decorator==5.1.1
-deepspeed
+deepspeed==0.15.1
 defusedxml==0.7.1
 dill==0.3.8
 einops==0.8.1
@@ -54,8 +54,8 @@ fsspec==2024.2.0
 ftfy==6.2.3
 grpcio==1.66.1
 h11==0.14.0
-hccl
-hccl-parser
+hccl @ file:///home/ma-user/selfgz25466421540/hccl/lib64/hccl-0.1.0-py3-none-any.whl#sha256=7430da90999562f19960412bacc5fde1fbf4d65ecacb9591baf14af45ead719f
+hccl-parser @ file:///home/ma-user/Ascend/ascend-toolkit/8.0.RC2.alpha003/toolkit/tools/hccl_parser-0.1-py3-none-any.whl#sha256=737dadb673ca0acc67172ec123d611a5a5c9960154aa5387b5590e4fed036570
 hf-xet==1.1.2
 hjson==3.1.0
 httpcore==1.0.5
@@ -91,24 +91,24 @@ jupyterlab_server==2.27.3
 latex2mathml==3.77.0
 lazy_loader==0.4
 librosa==0.10.2.post1
-llm-engine
+llm-engine @ file:///home/ma-user/selfgz2401465329/compiler/lib64/llm_engine-0.0.1-py3-none-any.whl#sha256=fb6dff74ad9a5459b9d162f85a08a588dead1e62375bcefa8a8bdc0fae35f65a
 llvmlite==0.43.0
 lxml==5.3.0
 Markdown==3.7
 MarkupSafe==2.1.5
 matplotlib-inline==0.1.7
 mdtex2html==1.3.0
-mindformers
-mindnlp
+mindformers @ file:///home/ma-user/work/env/mindformers/output/mindformers-1.3.0-py3-none-any.whl#sha256=3a6af13be96d5aeafdf0eb8691c2da0a07599af48d4054a0623dedcfee935dea
+mindnlp @ file:///data/share6/z00811969/work/whisper-npu-0619/mindnlp/dist/mindnlp-0.4.0-py3-none-any.whl#sha256=19c1a1ffb79b9257d2ce0af4a00026babd99c094cd6deeb49cfde44d37210062
 mindpet==1.0.4
-mindspore
-mindspore_lite
+mindspore @ file:///data/z00811969/downloads/8.0.RC2.alpha003/mindspore-2.3.1-cp310-cp310-linux_aarch64.whl#sha256=d9be757fa42b30e546920b5dffe76527f3f94e9aac88b262174ecd2a0f32c2e0
+mindspore_lite @ file:///home/ma-user/work/env/mindspore_lite-2.3.1-cp310-cp310-linux_aarch64.whl#sha256=767068f587ac25924b4ba172f47ef9a2f9bab8c6e8cedc1f7115fa1239ddc7bf
 mistune==3.0.2
 ml_dtypes==0.5.0
 more-itertools==10.5.0
-mpi4py
+mpi4py @ file:///croot/mpi4py_1671223372415/work
 mpmath==1.3.0
-msadvisor
+msadvisor @ file:///home/ma-user/Ascend/ascend-toolkit/8.0.RC2.alpha003/tools/msadvisor/python/msadvisor-1.0.0-cp37-abi3-linux_aarch64.whl#sha256=b2079135a22940bdf67d55f5e5ab665ff65b0d6ebc76373442289db58663acd4
 msgpack==1.1.0
 multidict==6.1.0
 multiprocess==0.70.16
@@ -124,10 +124,10 @@ notebook_shim==0.2.4
 numba==0.60.0
 numpy==1.24.4
 onnxruntime==1.19.2
-op-compile-tool
-op-gen
-op-test-frame
-opc-tool
+op-compile-tool @ file:///home/ma-user/selfgz2401465329/compiler/lib64/op_compile_tool-0.1.0-py3-none-any.whl#sha256=44d59e7d0128b579732732fc68419e2678f72ba7268ca1eb225d2b02270cd086
+op-gen @ file:///home/ma-user/Ascend/ascend-toolkit/8.0.RC2.alpha003/toolkit/tools/op_gen-0.1-py3-none-any.whl#sha256=84b0fdf1696f3e0c7a33c368381cae158ef55e122253fbf25b9e94e565147b61
+op-test-frame @ file:///home/ma-user/Ascend/ascend-toolkit/8.0.RC2.alpha003/toolkit/tools/op_test_frame-0.1-py3-none-any.whl#sha256=2bebfe13bc77d1e4188b3d274a1e41c223e16665a4553704afb88acfda575406
+opc-tool @ file:///home/ma-user/selfgz2401465329/compiler/lib64/opc_tool-0.1.0-py3-none-any.whl#sha256=ec3ec830e6f78655be471d928a66e316c91b296c587a42d5d0aae9ecdba1e71e
 openai-whisper==20231117
 opencv-python-headless==4.10.0.84
 orjson==3.10.18
@@ -176,7 +176,7 @@ ruamel.yaml==0.18.6
 ruamel.yaml.clib==0.2.8
 sacrebleu==2.4.3
 safetensors==0.4.5
-schedule-search
+schedule-search @ file:///home/ma-user/selfgz2401465329/compiler/lib64/schedule_search-0.1.0-py3-none-any.whl#sha256=ea0a7a3ce4ea410bf3b44f90e97b2d2f153b541f9dbb2f90b40fa2504bec0f93
 scikit-learn==1.5.2
 scipy==1.14.1
 Send2Trash==1.8.3
@@ -192,7 +192,7 @@ speechbrain==0.5.16
 stack-data==0.6.3
 sympy==1.13.2
 tabulate==0.9.0
-te
+te @ file:///home/ma-user/selfgz2401465329/compiler/lib64/te-0.4.0-py3-none-any.whl#sha256=c4c0d139ea2557aff07ba43d166e1485cb10ba1b283d734ee8e7b321c718ae04
 tensorboardX==2.6.2.2
 terminado==0.18.1
 threadpoolctl==3.5.0
