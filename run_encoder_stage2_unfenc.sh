@@ -27,7 +27,9 @@ export NCCL_IB_DISABLE=1
 # output_tag="../ACLlama_output/ACLlama_encoder_finetune_contrastive_captiondata_large_batch_after_stage1"
 # output_tag="../ACLlama_output/ACLlama_encoder_finetune_contrastive_captiondata_all_newcontrastiveloss_smalllr_after_stage1"
 # output_tag="../ACLlama_output/test"
-output_tag="../ACLlama_output/ACLlama_encoder_finetune_contrastive_captiondata_all_newcontrastiveloss_smalllr_after_stage1_lbmproj_textrealmask"
+# output_tag="../ACLlama_output/ACLlama_encoder_finetune_contrastive_captiondata_all_newcontrastiveloss_smalllr_after_stage1_lbmproj_textrealmask"
+# output_tag="../ACLlama_output/temp_file"
+output_tag="../ACLlama_output/contrastive_captiondata_all_smalllr_after_stage2_allloss_lbmproj_textrealmask_unfreezeenc"
 
 if [[ ! -e ${output_tag} ]]; then
     mkdir -p ${output_tag}
@@ -44,15 +46,15 @@ cmd="torchrun
     --node_rank 0
     --master_addr localhost
     --master_port 6601
-    finetune_acllama_encoder.py
+    finetune_acllama_encoder_stage2_unfenc.py
     --audio_model_name_or_path "/data/s50042884/huggingface_model/whisper-large-v3"
-    --text_model_name_or_path "/data/s50042884/my_code/ACLlama_output/ACLlama_encoder_chatllm_contrastive_lbmproj"
+    --text_model_name_or_path "/data/s50042884/my_code/ACLlama_output/ACLlama_encoder_chatllm_contrastive_lbmproj_testproj_unfenc"
     --data_path "/data/s50042884/my_code/data/audio_caps_formatted_clean.json"
     --output_dir ${output_tag}
-    --num_train_epochs 30
-    --per_device_train_batch_size 32
+    --num_train_epochs 8
+    --per_device_train_batch_size 16
     --per_device_eval_batch_size 1
-    --gradient_accumulation_steps 8
+    --gradient_accumulation_steps 16
     --evaluation_strategy "no"
     --save_strategy "steps"
     --save_steps 50
@@ -66,7 +68,8 @@ cmd="torchrun
     --report_to "none"
     --model_max_length 512
     --gradient_checkpointing True
-    --deepspeed "./config/ds_config_zero2.json""
+    --deepspeed "./config/ds_config_zero2.json"
+    --use_lora"
 
     # --per_device_train_batch_size 32 \
     # --per_device_eval_batch_size 1 \

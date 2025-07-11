@@ -14,7 +14,8 @@ from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 import transformers
 from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 import librosa
-from transformers import Trainer, GPTQConfig, deepspeed
+from transformers import Trainer, GPTQConfig
+from transformers.integrations import deepspeed
 from transformers import WhisperProcessor
 from transformers.trainer_pt_utils import LabelSmoother
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
@@ -24,7 +25,7 @@ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers import BitsAndBytesConfig
 #from ACLlama_align import ACLlamaForCausalLM
 # from ACLlama_el import ACLlamaForCausalLM
-from ACLlama_el_encoder import ACLlamaForCausalLM
+from ACLlama_el_encoder_stage2 import ACLlamaForCausalLM
 import string
 from tqdm import tqdm
 import orjson
@@ -43,6 +44,8 @@ random.seed(42)
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
 MAX_ASR_LENGTH = 200
+NEG_CONTRASTIVE_BATCH = 11
+DATALOADER_NUM_WORKERS = 8
 
 @dataclass
 class ModelArguments:
@@ -73,7 +76,7 @@ class TrainingArguments(transformers.TrainingArguments):
         },
     )
     use_lora: bool = False
-    dataloader_num_workers: int = 12
+    dataloader_num_workers: int = DATALOADER_NUM_WORKERS
 
 
 @dataclass
@@ -82,8 +85,8 @@ class LoraArguments:
     lora_alpha: int = 16
     lora_dropout: float = 0.05
     lora_target_modules: List[str] = field(
-        #default_factory=lambda: ['o_proj', 'k_proj', 'q_proj', 'v_proj']
-        default_factory=lambda: ['k_proj', 'q_proj', 'v_proj']
+        default_factory=lambda: ['o_proj', 'k_proj', 'q_proj', 'v_proj']
+        # default_factory=lambda: ['k_proj', 'q_proj', 'v_proj']
     )
     # lora_target_modules = None
     lora_weight_path: str = ""
@@ -467,7 +470,7 @@ class SupervisedDataset(Dataset):
         if self.raw_data_caption is not None:
             sources = [self.raw_data_caption[caption_data_id] for caption_data_id in range(self.raw_data_caption.num_rows)]
             data_dict = preprocess_caption(sources, tokenizer, max_len, asr_prompt=self.asr_prompt, caption_prompt=self.caption_prompt)
-            self.audio_processor = WhisperProcessor.from_pretrained(audio_processor_path)
+            self.audio_processor = WhisperProcessor.from_pretrained(audio_processor_path, dtype=torch.bfloat16)
             self.mask_id = tokenizer.pad_token_id
 
             self.input_ids = data_dict["input_ids"]
@@ -543,7 +546,7 @@ class SupervisedDataset(Dataset):
         else:
             all_indices = list(range(len(self.raw_data)))
         all_indices.remove(index)
-        neg_indices = random.sample(all_indices, k=self.num_negatives)
+        neg_indices = random.sample(all_indices, k=NEG_CONTRASTIVE_BATCH)
         neg_samples = [self._process_item(i) for i in neg_indices]
 
         # 分别提取字段
@@ -694,7 +697,6 @@ class LazySupervisedDataset(Dataset):
         self.audio_processor = WhisperProcessor.from_pretrained(audio_processor_path)
         
         self.training_args = training_args
-        self.num_negatives = 7
       
     def __len__(self):
         # return len(self.raw_data)
@@ -761,7 +763,7 @@ class LazySupervisedDataset(Dataset):
         else:
             all_indices = list(range(len(self.raw_data)))
         all_indices.remove(index)
-        neg_indices = random.sample(all_indices, k=self.num_negatives)
+        neg_indices = random.sample(all_indices, k=NEG_CONTRASTIVE_BATCH)
         neg_samples = [self._process_item(i) for i in neg_indices]
 
         # 分别提取字段
@@ -946,8 +948,8 @@ def train():
     data_module = make_supervised_data_module(
         tokenizer=tokenizer, data_args=data_args, training_args=training_args, max_len=training_args.model_max_length, audio_processor_path=model_args.audio_model_name_or_path
     )
-    # audio_config = model.get_model().audio_tower[0].config
-    audio_config = model.get_model().audio_tower.config
+    audio_config = model.get_model().audio_tower[0].config
+    # audio_config = model.get_model().audio_tower.config
     audio_config.audio_patch_token = tokenizer.get_vocab()["<audio_patch>"]
     audio_config.llm_pad_token_id = tokenizer.pad_token_id
     audio_config.audio_patch_size = CONFIG.audio_token_len
@@ -955,39 +957,40 @@ def train():
     if training_args.use_lora:
         #modules_to_save = None #["embed_tokens", "lm_head"]
         #modules_to_save = ["mm_projector1","mm_projector2","asr_encoder_layer"]
-        modules_to_save = ["mm_projector1","asr_transformer_encoder","out_norm","lbm"]
+        modules_to_save = ["mm_projector1","asr_transformer_encoder","out_norm","lbm", "temperature", "text_projector"]
+        # modules_to_save = ["audio_tower","mm_projector1","asr_transformer_encoder","out_norm","lbm"]
         # modules_to_save = ["mm_projector1","out_norm","lbm"]
 
-        # def find_all_linear_names(args, model):
-        #     import bitsandbytes as bnb
-        #     cls = bnb.nn.Linear4bit if args.load_in_4bit == 4 else (
-        #         bnb.nn.Linear8bitLt if args.load_in_8bit == 8 else torch.nn.Linear)
-        #     lora_module_names = set()
-        #     for name, module in model.named_modules():
-        #         if isinstance(module, cls):
-        #             names = name.split('.')
-        #             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+        def find_all_linear_names(args, model):
+            import bitsandbytes as bnb
+            cls = bnb.nn.Linear4bit if args.load_in_4bit == 4 else (
+                bnb.nn.Linear8bitLt if args.load_in_8bit == 8 else torch.nn.Linear)
+            lora_module_names = set()
+            for name, module in model.named_modules():
+                if isinstance(module, cls):
+                    names = name.split('.')
+                    lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
-        #     if 'lm_head' in lora_module_names:  # needed for 16-bit
-        #         lora_module_names.remove('lm_head')
-        #     return list(lora_module_names)
+            if 'lm_head' in lora_module_names:  # needed for 16-bit
+                lora_module_names.remove('lm_head')
+            return list(lora_module_names)
 
-        # if lora_args.lora_target_modules is None:
-        #     lora_args.lora_target_modules = find_all_linear_names(lora_args, model)
+        if lora_args.lora_target_modules is None:
+            lora_args.lora_target_modules = find_all_linear_names(lora_args, model)
             
-        # print(f"model is :{model}")
+        print(f"model is :{model}")
             
-        # my_target_modules = []
-        # for id, (name, param) in enumerate(model.named_modules()):
-        #     # "q_proj", "k_proj", "v_proj", "out_proj", "fc_in", "fc_out", "wte"
-        #     lora_list = lora_args.lora_target_modules
-        #     language_model_lora_tag = any(item in name for item in lora_list)
-        #     if language_model_lora_tag:
-        #         if 'audio_tower' not in name:
-        #             my_target_modules.append(name)
+        my_target_modules = []
+        for id, (name, param) in enumerate(model.named_modules()):
+            # "q_proj", "k_proj", "v_proj", "out_proj", "fc_in", "fc_out", "wte"
+            lora_list = lora_args.lora_target_modules
+            language_model_lora_tag = any(item in name for item in lora_list)
+            if language_model_lora_tag:
+                if 'audio_tower' not in name:
+                    my_target_modules.append(name)
             
-        # # print(f"my_target_modules is : {my_target_modules}")
-        # # exit(0)
+        # print(f"my_target_modules is : {my_target_modules}")
+        # exit(0)
             
         lora_config = LoraConfig(
             r=lora_args.lora_r,
@@ -1014,47 +1017,10 @@ def train():
         # Print peft trainable params
         model.print_trainable_parameters()
 
-    #######-load stage1 model
-    pretrained_model_path = "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage1_chatllm/checkpoint-4110"
-    combined_weights = torch.load(pretrained_model_path + "/base_model.bin", map_location=f"cuda")
-
-    """
-    training without lora
-    """
-    need_combined_weights = {}
-    for item in combined_weights.keys():
-        fix_item = item
-        if "base_model.model.model.layers." in fix_item:
-            continue
-        # # if "modules_to_save." in fix_item:
-        # #     continue
-        if "original_module." in fix_item:
-            continue
-        
-        # fix_item = fix_item.replace("base_model.model.model.", "model.")
-        fix_item = fix_item.replace("base_model.model.", "")
-        # fix_item = fix_item.replace("original_module.", "")
-        fix_item = fix_item.replace("modules_to_save.default.", "")
-        need_combined_weights[fix_item] = combined_weights[item]
-
+    #######-load stage2 model
+    pretrained_model_path = "/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage2_base_chatllm_stage1/checkpoint-6000"
+    need_combined_weights = torch.load(pretrained_model_path + "/base_model.bin", map_location=f"cuda")
     model.load_state_dict(need_combined_weights, strict=False)
-
-    # """
-    # training with lora
-    # """
-    # model.load_state_dict(combined_weights, strict=False)
-    
-    for name, param in model.named_parameters():
-        # if "audio_tower" in name and "decoder" in name:
-        #     param.requires_grad = False
-        if "audio_tower" in name:
-            param.requires_grad = False
-        if "embed_tokens" in name:
-            param.requires_grad = False
-        # if "audio_tower" in name and "encoder" in name and "conv" in name:
-        #     param.requires_grad = False
-    #     print(f"name is : {name} param is : {param.device}, {param.dtype}")
-    # exit(0)
     #######
 
     if training_args.gradient_checkpointing:
@@ -1094,19 +1060,55 @@ def train():
     
     #######
     audio_data_collator = AudioDataCollator(tokenizer, dataset=data_module["train_dataset"])
-    #######
     
-    # Start trainner
-    trainer = Trainer(
+    class ControlledLossLogger(TrainerCallback):
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs:
+                for key in ["lora_loss", "loss_asr", "contrastive_loss", "contrastive_temperature"]:
+                    if key in logs:
+                        print(f"[LOG] Step {state.global_step} | {key}: {logs[key]:.4f}")
+
+    
+    class CustomTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False):
+            outputs = model(**inputs)
+            loss = outputs["loss"]
+
+            extra_logs = {}
+            for key in ["lora_loss", "loss_asr", "contrastive_loss", "contrastive_temperature"]:
+                val = outputs.get(key)
+                if val is not None:
+                    extra_logs[key] = val.detach().cpu().float().item()
+
+            # ✅ 只有在当前 step 是 logging_steps 的倍数时才 log
+            if self.state.global_step % 25 == 0:
+                self.log(extra_logs)
+            
+            return (loss, outputs) if return_outputs else loss
+
+
+    # call_back_list.append(ControlledLossLogger())  # ✅ 加入实例
+
+    trainer = CustomTrainer(
         #model=model, tokenizer=tokenizer, args=training_args, callbacks=call_back_list, **data_module
         # model=model, tokenizer=tokenizer, args=training_args, **data_module
         #####
         model=model, tokenizer=tokenizer, args=training_args, callbacks=call_back_list, data_collator=audio_data_collator, **data_module
         #####
     )
+    #######
+    
+    # # Start trainner
+    # trainer = Trainer(
+    #     #model=model, tokenizer=tokenizer, args=training_args, callbacks=call_back_list, **data_module
+    #     # model=model, tokenizer=tokenizer, args=training_args, **data_module
+    #     #####
+    #     model=model, tokenizer=tokenizer, args=training_args, callbacks=call_back_list, data_collator=audio_data_collator, **data_module
+    #     #####
+    # )
 
     with torch.autocast("cuda"):
-        # trainer.train(resume_from_checkpoint="/data/s50042884/my_code/ACLlama_zhang/ACLlama_output/ACLlama_encoder_stage1_chatllm/checkpoint-4110/")
+        # trainer.train(resume_from_checkpoint="/data/s50042884/my_code/ACLlama_output/temp_file/checkpoint-300/")
         trainer.train()
     trainer.save_state()
 

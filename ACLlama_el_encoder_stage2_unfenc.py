@@ -9,7 +9,7 @@ from torch.nn import CrossEntropyLoss, CTCLoss
 from transformers import AutoConfig, AutoModelForCausalLM, \
                          LlamaConfig, LlamaModel, LlamaForCausalLM
 from transformers.trainer_pt_utils import LabelSmoother
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers import (
     WhisperProcessor,
     WhisperModel,
@@ -20,6 +20,12 @@ from transformers.models.whisper.modeling_whisper import WhisperAttention
 from transformers.activations import ACT2FN
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence
+from transformers.utils import ModelOutput
+from typing import Optional, Tuple
+from dataclasses import dataclass
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import os
 ######
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
@@ -63,8 +69,47 @@ class LookBackModule(nn.Module):
         return x, None
 
 ########
+@dataclass
+class CausalLMOutputWithPast(ModelOutput):
+    """
+    Base class for causal language model (or autoregressive) outputs.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Language modeling loss (for next-token prediction).
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`)
+
+            Contains pre-computed hidden-states (key and values in the self-attention blocks) that can be used (see
+            `past_key_values` input) to speed up sequential decoding.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    lora_loss: Optional[torch.FloatTensor] = None
+    loss_asr: Optional[torch.FloatTensor] = None
+    contrastive_loss: Optional[torch.FloatTensor] = None
+    contrastive_temperature: Optional[float] = None
+
 class LookBackModule_Contrastive(nn.Module):
-    def __init__(self, cfg: LlamaConfig):
+    def __init__(self, cfg: LlamaConfig, rms_norm_eps=1e-03):
         super().__init__()
         self.encoder_attn = nn.MultiheadAttention(
             cfg.hidden_size,
@@ -77,7 +122,7 @@ class LookBackModule_Contrastive(nn.Module):
         self.contrastive_head = nn.Sequential(nn.Linear(cfg.hidden_size , cfg.hidden_size*2),
                                             ACT2FN["gelu"],
                                             nn.Linear(cfg.hidden_size*2 , cfg.hidden_size))
-        self.contrastive_head_norm = nn.LayerNorm(cfg.hidden_size)
+        self.contrastive_head_norm = nn.LayerNorm(cfg.hidden_size, eps=rms_norm_eps)
 
     def forward(self, x, wav_feature, bf_shrink_padding_mask):
 
@@ -91,6 +136,7 @@ class LookBackModule_Contrastive(nn.Module):
         )
         
         contrastive_feature = self.contrastive_head(x.clone())
+        # contrastive_feature = F.normalize(contrastive_feature, dim=1)
         contrastive_feature = self.contrastive_head_norm(contrastive_feature)
         
         x += residual
@@ -182,6 +228,11 @@ class ACLlamaModel(LlamaModel):
         self.audio_tower = WhisperModel.from_pretrained(
         config.audio_tower, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True).to('cuda')
         self.audio_tower.config.forced_decoder_ids = None
+        
+        ########
+        self.audio_tower_config = self.audio_tower.config
+        self.audio_tower = self.audio_tower.encoder
+        ########
 
         if hasattr(config, "adapter_size"):
             #self.down_sampler = Conv1dSubsampler(config.adapter_size, config.hidden_size // 2, config.hidden_size // 2, [5])
@@ -216,11 +267,10 @@ class ACLlamaModel(LlamaModel):
             #     dropout=0.1,
             # )
             
-        # self.text_projector = nn.Sequential(nn.Linear(config.hidden_size , config.hidden_size*2),
-        #                                     ACT2FN["gelu"],
-        #                                     nn.Linear(config.hidden_size*2 , config.hidden_size))
+        self.text_projector = nn.Sequential(nn.Linear(config.hidden_size , config.hidden_size*2),
+                                            ACT2FN["gelu"],
+                                            nn.Linear(config.hidden_size*2 , config.hidden_size))
         self.avg_pooler = nn.AvgPool1d(2, stride=2)
-        del self.layers
         self.act_func = ACT2FN["gelu"]
         ########
 
@@ -252,6 +302,11 @@ class ACLlamaModel(LlamaModel):
             inputs_embeds = self.embed_tokens(input_ids)
 
         #######
+        inputs_embeds_save = inputs_embeds.clone()
+        inputs_embeds_save = self.text_projector(inputs_embeds_save)
+        inputs_embeds_save = F.layer_norm(inputs_embeds_save, inputs_embeds_save.shape[-1:])  # or nn.LayerNorm
+
+        
         # if input_ids_neg is not None:
         #     inputs_embeds_all = self.embed_tokens(torch.cat((input_ids, input_ids_neg), dim=0))
         # else:
@@ -289,7 +344,8 @@ class ACLlamaModel(LlamaModel):
 
  
             ######
-            audio_feature = self.audio_tower.encoder(audios.to(torch.bfloat16)).last_hidden_state.to(audios.dtype)
+            # audio_feature = self.audio_tower.encoder(audios.to(torch.bfloat16)).last_hidden_state.to(audios.dtype)
+            audio_feature = self.audio_tower(audios.to(torch.bfloat16)).last_hidden_state.to(audios.dtype)
             audio_feature = audio_feature.view(audio_feature.shape[0], audio_feature.shape[1] // 2, 2 * audio_feature.shape[2])
 
             audio_feature = self.mm_projector1(audio_feature)
@@ -315,9 +371,6 @@ class ACLlamaModel(LlamaModel):
 
             # print(f"audio_features_4_loss is : {audio_features_4_loss}")
             
-            # inputs_embeds = self.text_projector(inputs_embeds)
-            # inputs_embeds = F.layer_norm(inputs_embeds, inputs_embeds.shape[-1:])  # or nn.LayerNorm
-
             predict_logits = self.audio_feature_head(audio_features)
             
             new_input_embeds = []
@@ -360,50 +413,81 @@ class ACLlamaModel(LlamaModel):
 
             audio_feature_lengths = attention_mask.int().sum(dim=1)  # shape: (batch_size,)
                 
-            # if self.training: 
-            #     maxn_length = lengths.max()
-            #     label_extend = maxn_length - num_patches
-            #     for cur_input_ids, cur_input_embeds, shrink_feature in zip(input_ids, inputs_embeds, shrink_features):
-            #         pad_ids = torch.full(size=(maxn_length,), fill_value=audio_config.llm_pad_token_id, dtype=torch.long).to(attention_mask.device)
-            #         pad_embeds = self.embed_tokens(pad_ids)
-            #         v = shrink_feature.shape[0]
-            #         audio_start_token_pos = torch.where(cur_input_ids == audio_config.audio_patch_token)[0][:1]
-            #         cur_new_input_id = torch.cat((cur_input_ids[:audio_start_token_pos], cur_input_ids[audio_start_token_pos: audio_start_token_pos+1].repeat(v), cur_input_ids[audio_start_token_pos + num_patches:], pad_ids[:maxn_length - v]), dim=0)                    
-            #         cur_new_input_embeds = torch.cat((
-            #         cur_input_embeds[:audio_start_token_pos],
-            #         shrink_feature,
-            #         cur_input_embeds[audio_start_token_pos + num_patches:],pad_embeds[:maxn_length-v]), dim=0)                    
-            #         new_input_embeds.append(cur_new_input_embeds)
-            #         new_input_ids.append(cur_new_input_id)
-            #         label_shift.append(v - num_patches)
+                
+            """
+            contrative loss based on stage2
+            """
+            if self.training: 
+                maxn_length = lengths.max()
+                label_extend = maxn_length - num_patches
+                for cur_input_ids, cur_input_embeds, shrink_feature in zip(input_ids, inputs_embeds, shrink_features):
+                    pad_ids = torch.full(size=(maxn_length,), fill_value=audio_config.llm_pad_token_id, dtype=torch.long).to(attention_mask.device)
+                    pad_embeds = self.embed_tokens(pad_ids)
+                    v = shrink_feature.shape[0]
+                    audio_start_token_pos = torch.where(cur_input_ids == audio_config.audio_patch_token)[0][:1]
+                    cur_new_input_id = torch.cat((cur_input_ids[:audio_start_token_pos], cur_input_ids[audio_start_token_pos: audio_start_token_pos+1].repeat(v), cur_input_ids[audio_start_token_pos + num_patches:], pad_ids[:maxn_length - v]), dim=0)                    
+                    cur_new_input_embeds = torch.cat((
+                    cur_input_embeds[:audio_start_token_pos],
+                    shrink_feature,
+                    cur_input_embeds[audio_start_token_pos + num_patches:],pad_embeds[:maxn_length-v]), dim=0)                    
+                    new_input_embeds.append(cur_new_input_embeds)
+                    new_input_ids.append(cur_new_input_id)
+                    label_shift.append(v - num_patches)
                     
-            #     input_ids = torch.stack(new_input_ids, dim=0)
-            #     attention_mask=input_ids.ne(audio_config.llm_pad_token_id)
-            #     inputs_embeds = torch.stack(new_input_embeds, dim=0)
-            # else:
-            #     for cur_input_ids, cur_input_embeds, shrink_feature in zip(input_ids, inputs_embeds, shrink_features):
-            #         v = shrink_feature.shape[0]
+                input_ids = torch.stack(new_input_ids, dim=0)
+                attention_mask=input_ids.ne(audio_config.llm_pad_token_id)
+                inputs_embeds = torch.stack(new_input_embeds, dim=0)
+            else:
+                for cur_input_ids, cur_input_embeds, shrink_feature in zip(input_ids, inputs_embeds, shrink_features):
+                    v = shrink_feature.shape[0]
 
-            #         audio_start_token_pos = torch.where(cur_input_ids == audio_config.audio_patch_token)[0][:1]
-            #         cur_new_input_id = torch.cat((cur_input_ids[:audio_start_token_pos],cur_input_ids[audio_start_token_pos: audio_start_token_pos+1].repeat(v), cur_input_ids[audio_start_token_pos + num_patches:]),dim=0)
-            #         cur_new_input_embeds = torch.cat((
-            #         cur_input_embeds[:audio_start_token_pos],
-            #         shrink_feature,
-            #         cur_input_embeds[audio_start_token_pos + num_patches:]), dim=0)                    
-            #         new_input_embeds.append(cur_new_input_embeds)
-            #         new_input_ids.append(cur_new_input_id)
-            #     input_ids = torch.stack(new_input_ids, dim=0)
-            #     attention_mask=input_ids.ne(audio_config.llm_pad_token_id)
-            #     inputs_embeds = torch.stack(new_input_embeds, dim=0)
-            # ######
+                    audio_start_token_pos = torch.where(cur_input_ids == audio_config.audio_patch_token)[0][:1]
+                    cur_new_input_id = torch.cat((cur_input_ids[:audio_start_token_pos],cur_input_ids[audio_start_token_pos: audio_start_token_pos+1].repeat(v), cur_input_ids[audio_start_token_pos + num_patches:]),dim=0)
+                    cur_new_input_embeds = torch.cat((
+                    cur_input_embeds[:audio_start_token_pos],
+                    shrink_feature,
+                    cur_input_embeds[audio_start_token_pos + num_patches:]), dim=0)                    
+                    new_input_embeds.append(cur_new_input_embeds)
+                    new_input_ids.append(cur_new_input_id)
+                input_ids = torch.stack(new_input_ids, dim=0)
+                attention_mask=input_ids.ne(audio_config.llm_pad_token_id)
+                inputs_embeds = torch.stack(new_input_embeds, dim=0)
+                
+        return_state=super(ACLlamaModel, self).forward(
+            input_ids=None, attention_mask=attention_mask, past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds, use_cache=False,
+            output_attentions=output_attentions, output_hidden_states=output_hidden_states,
+            return_dict=return_dict
+        )
+        if self.training:
+            return_state["audio_features"] = predict_logits
+            return_state["label_shift"] = label_shift
+            return_state["label_extend"] = label_extend
             
-        return_state = {"audio_features": predict_logits}
+            
+        # #########
+        # return_state = {"audio_features": predict_logits}
+        # return_state_update = {"audio_feature_lengths": audio_feature_lengths, "audio_features_4_loss": audio_features_4_loss, "inputs_embeds": inputs_embeds, "inputs_embeds_all": inputs_embeds_all, "audio_feature_lengths_neg": audio_feature_lengths_neg, "shrink_mask": shrink_mask, "audio_features_ori_4_loss": audio_features, "shrink_features": padded_shrink_features, "shrink_lengths": lengths, "contrastive_features": contrastive_features}
+        # return_state.update(return_state_update)    
+        # #########
+        
+        
         #########
-        return_state_update = {"audio_feature_lengths": audio_feature_lengths, "audio_features_4_loss": audio_features_4_loss, "inputs_embeds": inputs_embeds, "inputs_embeds_all": inputs_embeds_all, "audio_feature_lengths_neg": audio_feature_lengths_neg, "shrink_mask": shrink_mask, "audio_features_ori_4_loss": audio_features, "shrink_features": padded_shrink_features, "shrink_lengths": lengths, "contrastive_features": contrastive_features}
-        return_state.update(return_state_update)    
+        if self.training:
+            return_state["audio_feature_lengths"] = predict_logits
+            return_state["audio_features_4_loss"] = audio_features_4_loss
+            return_state["inputs_embeds"] = inputs_embeds_save
+            return_state["inputs_embeds_all"] = inputs_embeds_all
+            return_state["audio_feature_lengths_neg"] = audio_feature_lengths_neg
+            return_state["shrink_mask"] = shrink_mask
+            return_state["audio_features_ori_4_loss"] = audio_features
+            return_state["shrink_features"] = padded_shrink_features
+            return_state["shrink_lengths"] = lengths
+            return_state["contrastive_features"] = contrastive_features
         #########
         
         return return_state 
+
 
 class TrainableScalar(nn.Module):
     def __init__(self, init_value: float):
@@ -412,7 +496,6 @@ class TrainableScalar(nn.Module):
 
     def forward(self):
         return self.scalar[0]  # 返回标量值
-
 
 
 class ACLlamaForCausalLM(LlamaForCausalLM):
@@ -427,10 +510,14 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
         ########
         self.similarity_function = nn.CosineSimilarity(dim=-1)
         # self.temperature = nn.Parameter(torch.log(torch.tensor(1.0 / 7)))
-        self.temperature = TrainableScalar(1.0 / 7e-2)
+        # self.temperature = TrainableScalar(1.0 / 7e-2)
+        self.temperature = TrainableScalar(1.0 / 1e-1)
         # self.temperature = TrainableScalar(1e+1)
 
         # self.temperature = 1.0
+        
+        self.text_layer_norm = nn.LayerNorm(config.hidden_size, eps=1e-3)
+        self.audio_layer_norm = nn.LayerNorm(config.hidden_size, eps=1e-3)
         ########
 
         # Initialize weights and apply final processing
@@ -508,19 +595,20 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
         )
         
         #######
-        audio_feature_lengths = outputs.pop("audio_feature_lengths")
-        audio_feature_lengths_neg = outputs.pop("audio_feature_lengths_neg")
-        audio_features_4_loss = outputs.pop("audio_features_4_loss")
-        inputs_embeds = outputs.pop("inputs_embeds")
-        inputs_embeds_all = outputs.pop("inputs_embeds_all")
-        shrink_mask = outputs.pop("shrink_mask")
-        audio_features_ori_4_loss = outputs.pop("audio_features_ori_4_loss")
-        shrink_features = outputs.pop("shrink_features")
-        shrink_lengths = outputs.pop("shrink_lengths")
-        contrastive_features = outputs.pop("contrastive_features")
+        audio_feature_lengths = getattr(outputs, "audio_feature_lengths", None)
+        audio_feature_lengths_neg = getattr(outputs, "audio_feature_lengths_neg", None)
+        audio_features_4_loss = getattr(outputs, "audio_features_4_loss", None)
+        inputs_embeds = getattr(outputs, "inputs_embeds", None)
+        inputs_embeds_all = getattr(outputs, "inputs_embeds_all", None)
+        shrink_mask = getattr(outputs, "shrink_mask", None)
+        audio_features_ori_4_loss = getattr(outputs, "audio_features_ori_4_loss", None)
+        shrink_features = getattr(outputs, "shrink_features", None)
+        shrink_lengths = getattr(outputs, "shrink_lengths", None)
+        contrastive_features = getattr(outputs, "contrastive_features", None)
         #######
         
-        # logits = self.lm_head(inputs_embeds)
+        hidden_states = outputs[0]
+        logits = self.lm_head(hidden_states)
 
         loss = None
         if labels is not None:
@@ -553,6 +641,35 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
                     )
             else:
                 loss_asr=0
+            
+            
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+
+            if len(outputs["label_shift"]) >0:
+                if outputs["label_extend"] != -1:
+                    new_shift_labels = torch.full(size=(shift_labels.shape[0], outputs["label_extend"]+shift_labels.shape[1]), fill_value=IGNORE_TOKEN_ID, dtype=torch.long).to(shift_labels.device)
+                    for i in range(len(outputs["label_shift"])):
+                        #extend=torch.full(size=(outputs["label_extend"][i],), fill_value=IGNORE_TOKEN_ID, dtype=torch.long).to(shift_labels[i].device)
+                        #shift_labels[i] = torch.cat((shift, shift_labels[i], extend), dim=0)
+                        #print(new_shift_labels[i].shape,outputs["label_shift"][i],len(shift_labels[i]))
+                        new_shift_labels[i][outputs["label_shift"][i]:outputs["label_shift"][i] + len(shift_labels[i])]= shift_labels[i]
+                    shift_labels = new_shift_labels
+                else:
+                    for i in range(len(outputs["label_shift"])):
+                        shift_labels[i]= shift_labels[i].roll(-outputs["label_shift"][i])
+
+            loss_fct = CrossEntropyLoss()
+            # Flatten the tokens
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+
+            # Enable model/pipeline parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
+            
+            
             
             # 这里需要把text改成asr_target
             ######### 
@@ -614,37 +731,38 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
             # # loss = F.cross_entropy(logits * 0.5 * torch.exp(self.temperature()), labels)
             
             
-            
-            
             # 把sos + text + eos送到encoder，然后用eos代表整个sequence的，但是这个需要经过encoder，不能仅经过emb
             """
             contrastive loss based on other open-source code
             """
-            contrastive_features = pad_sequence(contrastive_features, batch_first=True, padding_value=0).clone()
+            contrastive_features = pad_sequence(contrastive_features, batch_first=True, padding_value=0)
             masked_sum2 = contrastive_features.sum(dim=1)  # [B, D]
             shrink_lengths = shrink_lengths.unsqueeze(-1).to(contrastive_features.dtype)
             masked_mean2 = masked_sum2 / (shrink_lengths + 1e-8)  # [B, D]
-            mean2 = F.normalize(masked_mean2, dim=-1)
-
-            
+            # mean2 = F.normalize(masked_mean2, dim=-1, eps=1e-8)
+            mean2 = self.audio_layer_norm(masked_mean2)
+        
             # assert audio_features_ori_4_loss.shape[:2] == shrink_mask.shape[:2], f"Shape mismatch in ACLlama_el_encoder.py: {audio_features_ori_4_loss.shape[:2]} vs {shrink_mask.shape[:2]}"
             # shrink_mask = shrink_mask.unsqueeze(-1).type_as(audio_features_ori_4_loss).detach()
             # masked_sum2 = (audio_features_ori_4_loss * shrink_mask).sum(dim=1)  # [B, D]
             # masked_mean2 = masked_sum2 / (shrink_mask.sum(dim=1) + 1e-8)  # [B, D]
             # mean2 = F.normalize(masked_mean2, dim=-1)
 
-            # 手动构造 attention mask（注意长度也扩展）
-            mask1 = torch.arange(inputs_embeds.size(1), device=inputs_embeds.device)[None, :] < audio_feature_lengths[:, None]  # [2B, L]
-            mask1 = mask1.unsqueeze(-1).type_as(inputs_embeds)  # [2B, L, 1]
+            # inputs_embeds: [2B, L, D]
+            # text attention mask（注意，扩展到 2B）
+            if inputs_embeds_all is not None:
+                inputs_embeds = inputs_embeds_all
+
+            caption_text_masks = torch.cat([caption_text_masks, neg_caption_text_masks], dim=0).unsqueeze(-1)
 
             # masked mean pooling
-            # masked_sum1 = (inputs_embeds * mask1).sum(dim=1)  # [2B, D]
-            masked_sum1 = (inputs_embeds * caption_text_masks.unsqueeze(-1)).sum(dim=1)  # [2B, D]
-            masked_mean1 = masked_sum1 / (mask1.sum(dim=1) + 1e-8)  # [2B, D]
-            masked_mean1 = F.normalize(masked_mean1, dim=-1)
+            masked_sum1 = (inputs_embeds * caption_text_masks).sum(dim=1)  # [2B, D]
+            masked_mean1 = masked_sum1 / (caption_text_masks.sum(dim=1) + 1e-8)  # [2B, D]
+            # masked_mean1 = F.normalize(masked_mean1, dim=-1)
+            masked_mean1 = self.text_layer_norm(masked_mean1)
 
-            def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-                labels = torch.arange(len(logits), device=logits.device)
+            def compute_contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
+                labels = torch.arange(logits.size(0), device=logits.device)
                 return nn.functional.cross_entropy(logits, labels)
 
             def weighted_loss(logits, sentence_sim, k=0.01):
@@ -656,7 +774,7 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
                 normed_sim = sentence_sim / sentence_sim.sum()
                 weight = torch.exp(normed_sim / k)
 
-                labels = torch.arange(len(logits), device=logits.device)
+                labels = torch.arange(logits.size(0), device=logits.device)
                 loss = weight * nn.functional.cross_entropy(logits, labels, reduction="none")
                 loss = loss.sum() / weight.sum()
 
@@ -667,18 +785,58 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
                     text_loss = weighted_loss(similarity, sentence_sim)
                     audio_loss = weighted_loss(similarity.T, sentence_sim)
                 else:
-                    text_loss = contrastive_loss(similarity)
-                    audio_loss = contrastive_loss(similarity.T)
+                    if similarity.size(0) == similarity.size(1):
+                        text_loss = compute_contrastive_loss(similarity)
+                        audio_loss = compute_contrastive_loss(similarity.T)
+                    else:
+                        text_loss = compute_contrastive_loss(similarity[:similarity.size(1), :])
+                        audio_loss = compute_contrastive_loss(similarity.T)
                 return (text_loss + audio_loss) / 2.0
             
             sentence_sim = None
             # logits: audio anchor → text pos+neg
-            logits = torch.exp(self.temperature()) * mean2 @ masked_mean1.t()
+            contrastive_logits = torch.exp(self.temperature()) * mean2 @ masked_mean1.t()
             
-            logits_per_text = logits.t()
-            loss = clip_loss(
+            logits_per_text = contrastive_logits.t()
+            contrastive_loss = clip_loss(
                 logits_per_text, sentence_sim, type_loss="clip"
             )
+            
+            
+
+            # def visualize_and_save_contrastive_features(audio_features, text_features, save_path="contrastive_tsne.png"):
+            #     import os
+            #     import torch
+            #     import matplotlib.pyplot as plt
+            #     from sklearn.manifold import TSNE
+
+            #     features = torch.cat([audio_features, text_features], dim=0).detach().cpu().numpy()
+            #     n_audio = audio_features.shape[0]
+            #     n_samples = features.shape[0]
+            #     perplexity = min(30, max(5, n_samples // 3))
+
+            #     tsne = TSNE(n_components=2, perplexity=perplexity, learning_rate=200, init='random', random_state=42)
+            #     features_2d = tsne.fit_transform(features)
+
+            #     # 拆分为 audio/text 部分
+            #     audio_tsne = features_2d[:n_audio]
+            #     text_tsne = features_2d[n_audio:]
+
+            #     # 画图
+            #     plt.figure(figsize=(8, 8))
+            #     plt.scatter(audio_tsne[:, 0], audio_tsne[:, 1], color='red', alpha=0.6, label='Audio')
+            #     plt.scatter(text_tsne[:, 0], text_tsne[:, 1], color='blue', alpha=0.6, label='Text')
+
+            #     plt.title(f"Contrastive Feature t-SNE (perplexity={perplexity})")
+            #     plt.legend()
+            #     plt.grid(True)
+            #     plt.savefig(save_path, dpi=300)
+            #     plt.close()
+
+            #     print(f"[✔] 图像已保存到: {save_path}")
+
+            # visualize_and_save_contrastive_features(mean2, masked_mean1[:mean2.size(0), :], save_path="/data/s50042884/my_code/ACLlama/contrastive_features_tsne.png")
+            # exit(0)
             #########
 
 
@@ -790,13 +948,20 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
             # ########
             
             # loss = loss + loss_asr * 0.3
-            loss = loss * 0.7 + loss_asr * 0.3
+            # loss = loss * 0.7 + loss_asr * 0.3
+            loss = loss * 0.2 + loss_asr * 0.2 + contrastive_loss
+            # loss = loss + loss_asr + contrastive_loss
+            # loss = loss / 3
             # loss = loss_contrastive
 
         return CausalLMOutputWithPast(
             loss=loss,
             # logits=asr_logits,
             logits=logits.unsqueeze(1),
+            lora_loss=loss,
+            loss_asr=loss_asr,
+            contrastive_loss=contrastive_loss,
+            contrastive_temperature=torch.exp(self.temperature()),
         )
 
     def prepare_inputs_for_generation(

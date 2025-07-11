@@ -22,10 +22,12 @@ from accelerate.utils import DistributedType
 from transformers import BitsAndBytesConfig
 # from ACLlama import ACLlamaForCausalLM
 # from ACLlama_el import ACLlamaForCausalLM
-from ACLlama_el_encoder import ACLlamaForCausalLM
+# from ACLlama_el_encoder import ACLlamaForCausalLM
+from ACLlama_el_encoder_stage2_unfenc import ACLlamaForCausalLM
 
 ########
 import torch.nn as nn
+import numpy as np
 ########
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
@@ -437,8 +439,16 @@ def train():
                 module.weight.data[module.padding_idx].zero_()
             
     model.get_model().asr_transformer_encoder.apply(init_weights)
-    # model.get_model().text_projector.apply(init_weights)
-
+    model.get_model().text_projector.apply(init_weights)
+    model.get_model().lbm.apply(init_weights)
+    model.model.lbm.contrastive_head.apply(init_weights)
+    
+    model.model.lbm.contrastive_head_norm.apply(init_weights)
+    model.audio_layer_norm.apply(init_weights)
+    model.text_layer_norm.apply(init_weights)
+    model.temperature.scalar = torch.nn.init.constant_(model.temperature.scalar, np.log(1 / 1e-1))
+    
+    
     #update embeddings
     embeddings=model.get_input_embeddings()
     new_embeddings = torch.nn.Embedding(embeddings.num_embeddings+1, embeddings.embedding_dim, embeddings.padding_idx).to(CONFIG.device,dtype=torch.bfloat16)
