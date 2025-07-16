@@ -270,6 +270,8 @@ class ACLlamaModel(LlamaModel):
         self.text_projector = nn.Sequential(nn.Linear(config.hidden_size , config.hidden_size*2),
                                             ACT2FN["gelu"],
                                             nn.Linear(config.hidden_size*2 , config.hidden_size))
+        self.text_projector_norm = nn.LayerNorm(config.hidden_size, eps=1e-3)
+        
         self.avg_pooler = nn.AvgPool1d(2, stride=2)
         self.act_func = ACT2FN["gelu"]
         ########
@@ -303,9 +305,8 @@ class ACLlamaModel(LlamaModel):
 
         #######
         inputs_embeds_save = inputs_embeds.clone()
-        inputs_embeds_save = self.text_projector(inputs_embeds_save)
-        inputs_embeds_save = F.layer_norm(inputs_embeds_save, inputs_embeds_save.shape[-1:])  # or nn.LayerNorm
-
+        # inputs_embeds_save = self.text_projector(inputs_embeds_save)
+        # inputs_embeds_save = self.text_projector_norm(inputs_embeds_save)
         
         # if input_ids_neg is not None:
         #     inputs_embeds_all = self.embed_tokens(torch.cat((input_ids, input_ids_neg), dim=0))
@@ -949,7 +950,8 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
             
             # loss = loss + loss_asr * 0.3
             # loss = loss * 0.7 + loss_asr * 0.3
-            loss = loss * 0.2 + loss_asr * 0.2 + contrastive_loss
+            # loss = loss * 0.2 + loss_asr * 0.2 + contrastive_loss
+            loss = loss_asr + contrastive_loss
             # loss = loss + loss_asr + contrastive_loss
             # loss = loss / 3
             # loss = loss_contrastive
@@ -958,12 +960,13 @@ class ACLlamaForCausalLM(LlamaForCausalLM):
             loss=loss,
             # logits=asr_logits,
             logits=logits.unsqueeze(1),
-            lora_loss=loss,
+            # lora_loss=loss,
             loss_asr=loss_asr,
             contrastive_loss=contrastive_loss,
             contrastive_temperature=torch.exp(self.temperature()),
         )
-
+        
+        
     def prepare_inputs_for_generation(
         self,
         input_ids,

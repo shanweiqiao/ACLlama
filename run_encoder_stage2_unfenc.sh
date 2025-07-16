@@ -29,7 +29,8 @@ export NCCL_IB_DISABLE=1
 # output_tag="../ACLlama_output/test"
 # output_tag="../ACLlama_output/ACLlama_encoder_finetune_contrastive_captiondata_all_newcontrastiveloss_smalllr_after_stage1_lbmproj_textrealmask"
 # output_tag="../ACLlama_output/temp_file"
-output_tag="../ACLlama_output/contrastive_captiondata_all_smalllr_after_stage2_allloss_lbmproj_textrealmask_unfreezeenc"
+# output_tag="../ACLlama_output/contrastive_captiondata_all_smalllr_after_stage2_allloss_lbmproj_textrealmask_unfreezeenc"
+output_tag="../ACLlama_output/contrastive_captiondata_all_smalllr_after_stage2_allloss_lbmproj_textrealmask_unfreezeenc_wostage2loss"
 
 if [[ ! -e ${output_tag} ]]; then
     mkdir -p ${output_tag}

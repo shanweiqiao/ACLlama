@@ -1027,6 +1027,9 @@ def train():
                     parameter.requires_grad = True
                 else:
                     parameter.requires_grad = False
+            if "lora" in name:
+                parameter.requires_grad = False
+                    
         # Print peft trainable params
         model.print_trainable_parameters()
 
@@ -1077,7 +1080,8 @@ def train():
     class ControlledLossLogger(TrainerCallback):
         def on_log(self, args, state, control, logs=None, **kwargs):
             if logs:
-                for key in ["lora_loss", "loss_asr", "contrastive_loss", "contrastive_temperature"]:
+                # for key in ["lora_loss", "loss_asr", "contrastive_loss", "contrastive_temperature"]:
+                for key in ["loss_asr", "contrastive_loss", "contrastive_temperature"]:
                     if key in logs:
                         print(f"[LOG] Step {state.global_step} | {key}: {logs[key]:.4f}")
 
@@ -1088,7 +1092,8 @@ def train():
             loss = outputs["loss"]
 
             extra_logs = {}
-            for key in ["lora_loss", "loss_asr", "contrastive_loss", "contrastive_temperature"]:
+            # for key in ["lora_loss", "loss_asr", "contrastive_loss", "contrastive_temperature"]:
+            for key in ["loss_asr", "contrastive_loss", "contrastive_temperature"]:
                 val = outputs.get(key)
                 if val is not None:
                     extra_logs[key] = val.detach().cpu().float().item()

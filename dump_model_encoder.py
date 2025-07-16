@@ -439,10 +439,12 @@ def train():
                 module.weight.data[module.padding_idx].zero_()
             
     model.get_model().asr_transformer_encoder.apply(init_weights)
-    model.get_model().text_projector.apply(init_weights)
+    model.get_model().out_norm.apply(init_weights)
     model.get_model().lbm.apply(init_weights)
-    model.model.lbm.contrastive_head.apply(init_weights)
     
+    model.get_model().text_projector.apply(init_weights)
+    model.get_model().text_projector_norm.apply(init_weights)
+    model.model.lbm.contrastive_head.apply(init_weights)
     model.model.lbm.contrastive_head_norm.apply(init_weights)
     model.audio_layer_norm.apply(init_weights)
     model.text_layer_norm.apply(init_weights)
